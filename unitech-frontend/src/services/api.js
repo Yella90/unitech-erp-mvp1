@@ -2,7 +2,7 @@ import axios from 'axios';
 import { clearStoredAuth, getLoginRouteForCurrentPath } from './auth';
 
 const api = axios.create({
-  baseURL: 'http://localhost:5000/api',
+  baseURL: '',
 });
 
 api.interceptors.request.use(
