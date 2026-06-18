@@ -5,6 +5,7 @@ const { computeStudentFinanceSummary } = require('../utils/financeCalculations')
 const { buildSubscriptionAccessStatus } = require('../utils/subscriptionAccess');
 const { computeInscriptionForecast } = require('../utils/inscriptionForecast');
 
+
 function all(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.all(sql, params, (err, rows) => {
@@ -689,6 +690,15 @@ async function incrementClassEffectif(schoolId, classId) {
   await run(
     `UPDATE classes
      SET effectif = COALESCE(effectif, 0) + 1
+     WHERE id = ? AND school_id = ?`,
+    [classId, schoolId]
+  );
+}
+async function desincrementClassEffectif(schoolId, classId) {
+  if (!classId) return;
+  await run(
+    `UPDATE classes
+     SET effectif = COALESCE(effectif, 0) -1
      WHERE id = ? AND school_id = ?`,
     [classId, schoolId]
   );
@@ -1555,7 +1565,7 @@ async function ensureSchoolYear(schoolId) {
   const school = await get('SELECT current_school_year FROM schools WHERE id = ?', [schoolId]);
   const label = school?.current_school_year || `${new Date().getFullYear()}-${new Date().getFullYear() + 1}`;
   await run(
-    'INSERT OR IGNORE INTO school_years (school_id, label, is_active) VALUES (?, ?, 1)',
+    'INSERT INTO school_years (school_id, label, is_active) VALUES (?, ?, 1) ON CONFLICT (school_id, label) DO NOTHING',
     [schoolId, label]
   );
   await run('UPDATE schools SET current_school_year = ? WHERE id = ?', [label, schoolId]);
@@ -1735,12 +1745,13 @@ async function getSchoolYearTransitionContextData(schoolId) {
 async function addNotification(schoolId, payload) {
   const { type, title, message, entityType, entityRef, metadata, uniqueKey } = payload;
   await run(
-    `INSERT OR IGNORE INTO notifications
+    `INSERT INTO notifications
      (school_id, type, title, message, entity_type, entity_ref, metadata, unique_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      schoolId,
-      type,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (school_id, unique_key) DO NOTHING`,
+      [
+        schoolId,
+        type,
       title,
       message,
       entityType || null,
@@ -1889,7 +1900,7 @@ exports.getDashboardSummary = async (req, res) => {
 
     const [classesCount, elevesCount, enseignantsCount, personnelsCount, finance, latestSubscription, recentClasses, timeline, classForecast, monthlySalaryForecast] = await Promise.all([
       get('SELECT COUNT(*) AS total FROM classes WHERE school_id = ?', [schoolId]),
-      get('SELECT COUNT(*) AS total FROM eleves WHERE ecole_actuelle_id = ?', [schoolId]),
+      get('SELECT COUNT(*) AS total FROM eleves WHERE ecole_actuelle_id = ? AND statut = ?', [schoolId, 'actif']),
       get('SELECT COUNT(*) AS total FROM enseignants WHERE school_id = ?', [schoolId]),
       get('SELECT COUNT(*) AS total FROM personnels WHERE school_id = ?', [schoolId]),
       exports.computeFinanceOverviewRaw(schoolId),
@@ -4776,12 +4787,21 @@ exports.updateTransferStatus = async (req, res) => {
           transfer.eleve_id,
           transfer.school_id,
         ]);
+        await desincrementClassEffectif(transfer.from_classe_id, transfer.school_id);
+        if (transfer.to_classe_id) {
+          await incrementClassEffectif(transfer.to_classe_id, transfer.to_school_id);
+        }
+       
       } else {
         await run('UPDATE eleves SET classe_actuelle_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND ecole_actuelle_id = ?', [
           transfer.to_classe_id,
           transfer.eleve_id,
           transfer.school_id,
         ]);
+        await desincrementClassEffectif(transfer.from_classe_id, transfer.school_id);
+        if (transfer.to_classe_id) {
+          await incrementClassEffectif(transfer.to_classe_id, transfer.school_id);
+        }
       }
     }
     res.json({ message: 'Transfert mis a jour' });

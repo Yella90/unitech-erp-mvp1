@@ -28,6 +28,32 @@ function formatDateDisplay(value) {
   return date.toLocaleDateString('fr-FR');
 }
 
+function formatRemainingDuration(effectiveExpiresAt, nowDate, monthsRemaining, daysRemaining) {
+  if (!(effectiveExpiresAt instanceof Date) || Number.isNaN(effectiveExpiresAt.getTime())) return null;
+  if (!(nowDate instanceof Date) || Number.isNaN(nowDate.getTime())) return null;
+
+  const remainingMs = effectiveExpiresAt.getTime() - nowDate.getTime();
+  if (remainingMs <= 0) {
+    return '1 jour(s)';
+  }
+
+  if (monthsRemaining !== null && monthsRemaining > 0) {
+    const monthAnchor = addMonths(nowDate, monthsRemaining);
+    const extraDays = monthAnchor
+      ? Math.max(0, Math.ceil((effectiveExpiresAt.getTime() - monthAnchor.getTime()) / DAY_MS))
+      : 0;
+    return extraDays > 0
+      ? `${monthsRemaining} mois et ${extraDays} jour(s)`
+      : `${monthsRemaining} mois`;
+  }
+
+  if (daysRemaining !== null) {
+    return `${Math.max(1, daysRemaining)} jour(s)`;
+  }
+
+  return null;
+}
+
 function buildSubscriptionAccessStatus(subscription, now = new Date()) {
   if (!subscription) return null;
 
@@ -48,6 +74,7 @@ function buildSubscriptionAccessStatus(subscription, now = new Date()) {
   const daysUntilCutoff = graceEndsAt ? Math.max(0, Math.ceil((graceEndsAt.getTime() - nowDate.getTime()) / DAY_MS)) : null;
   const daysRemaining = effectiveExpiresAt ? Math.max(0, Math.ceil((effectiveExpiresAt.getTime() - nowDate.getTime()) / DAY_MS)) : null;
   const monthsRemaining = effectiveExpiresAt ? Math.max(0, differenceInCalendarMonths(nowDate, effectiveExpiresAt)) : null;
+  const remainingLabel = formatRemainingDuration(effectiveExpiresAt, nowDate, monthsRemaining, daysRemaining);
 
   let accessBlocked = false;
   let code = null;
@@ -74,10 +101,8 @@ function buildSubscriptionAccessStatus(subscription, now = new Date()) {
       message = "Accès suspendu: l'abonnement est arrivé à expiration.";
     } else {
       level = 'success';
-      if (monthsRemaining !== null && monthsRemaining > 0) {
-        message = `Abonnement actif. Il reste ${monthsRemaining} mois avant la fin (${formatDateDisplay(effectiveExpiresAt)}).`;
-      } else if (daysRemaining !== null) {
-        message = `Abonnement actif. Il reste moins d'un mois (${daysRemaining} jour(s)) avant la fin (${formatDateDisplay(effectiveExpiresAt)}).`;
+      if (remainingLabel) {
+        message = `Abonnement actif. Il reste ${remainingLabel} avant la fin (${formatDateDisplay(effectiveExpiresAt)}).`;
       } else {
         message = 'Abonnement actif.';
       }
@@ -106,6 +131,7 @@ function buildSubscriptionAccessStatus(subscription, now = new Date()) {
     daysUntilCutoff,
     daysRemaining,
     monthsRemaining,
+    remainingLabel,
     accessBlocked,
     code,
     message,

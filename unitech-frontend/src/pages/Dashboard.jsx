@@ -40,6 +40,22 @@ function formatSubscriptionBadge(subscription) {
   return subscription.status || '';
 }
 
+function formatSubscriptionRemaining(subscription) {
+  if (!subscription) return '-';
+  if (subscription.status !== 'active') return '-';
+  if (subscription.remainingLabel) return subscription.remainingLabel;
+
+  if (subscription.monthsRemaining !== null && subscription.monthsRemaining > 0) {
+    return `${subscription.monthsRemaining} mois`;
+  }
+
+  if (subscription.daysRemaining !== null) {
+    return `${Math.max(1, subscription.daysRemaining)} jour(s)`;
+  }
+
+  return '-';
+}
+
 function MetricCard({ label, value, hint, icon: Icon, color, tone = 'bg-white', className = '' }) {
   return (
     <div className={`rounded-xl p-5 shadow-sm ring-1 ring-slate-200 ${tone} ${className}`}>
@@ -510,11 +526,9 @@ function Dashboard() {
               ) : null}
               {summary.subscriptionStatus.status === 'active' ? (
                 <div className="rounded-xl bg-white/70 px-3 py-2">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Mois restants</p>
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Reste a courir</p>
                   <p className="font-semibold text-slate-900">
-                    {summary.subscriptionStatus.monthsRemaining !== null
-                      ? `${summary.subscriptionStatus.monthsRemaining} mois`
-                      : '-'}
+                    {formatSubscriptionRemaining(summary.subscriptionStatus)}
                   </p>
                 </div>
               ) : null}

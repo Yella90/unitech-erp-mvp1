@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const db = require('../database/db');
 const { computeStudentFinanceSummary } = require('../utils/financeCalculations');
 
+
 const eleveColumns = [
   'matricule',
   'nom',
@@ -61,7 +62,24 @@ function normalizeOptionalValue(value) {
   if (value === undefined) return null;
   return value;
 }
-
+function decrementClassEffectif(classId, schoolId, callback) {
+  db.run(
+    `UPDATE classes
+      SET effectif = COALESCE(effectif, 0) - 1
+      WHERE id = ? AND school_id = ? AND effectif > 0`,
+    [classId, schoolId],
+    function(err) {
+      if (err) {
+        return callback(err);
+      }
+      if (this.changes === 0) {
+        // Aucune ligne mise à jour, peut-être car effectif était déjà 0
+        return callback(null, { changes: 0, message: 'Aucun changement, effectif déjà à 0 ou classe introuvable' });
+      }
+      callback(null, { changes: this.changes });
+    }
+  );
+}
 function pickElevePayload(body) {
   return eleveColumns.reduce((acc, column) => {
     acc[column] = normalizeOptionalValue(body[column]);
@@ -86,6 +104,7 @@ function incrementClassEffectif(classId, schoolId, callback) {
     callback
   );
 }
+exports.incrementClassEffectif = incrementClassEffectif;
 
 exports.addEleve = (req, res) => {
   const schoolId = req.user.school_id;
@@ -317,7 +336,7 @@ exports.deactivateEleve = (req, res) => {
     }
 
     db.get(
-      'SELECT id, statut, nom, prenom FROM eleves WHERE id = ? AND ecole_actuelle_id = ?',
+      'SELECT * FROM eleves WHERE id = ? AND ecole_actuelle_id = ?',
       [eleveId, schoolId],
       (eleveErr, eleve) => {
         if (eleveErr) {
@@ -343,7 +362,13 @@ exports.deactivateEleve = (req, res) => {
             if (this.changes === 0) {
               return res.status(404).json({ error: 'Eleve non trouve ou pas autorise' });
             }
-
+            //update the class effectif
+            console.log('classe_actuelle_id:', eleve.classe_actuelle_id, 'schoolId:', schoolId);
+          decrementClassEffectif(eleve.classe_actuelle_id, schoolId, (effectifErr) => {
+            if (effectifErr) {
+              console.error("Erreur lors de la mise a jour de l'effectif de la classe:", effectifErr);
+              return res.status(500).json({ error: 'Eleve desactive mais effectif de classe non mis a jour' });
+            }})
             return res.json({
               message: `Eleve desactive avec succes: ${eleve.nom || ''} ${eleve.prenom || ''}`.trim(),
               statut: 'exclu',

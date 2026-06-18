@@ -40,7 +40,7 @@ function Transferts() {
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {  load(); }, []);
 
   const availableClasses = classes.filter((item) => {
     if (formData.transfer_type === 'external') {
@@ -67,6 +67,18 @@ function Transferts() {
     try {
       setError('');
       setSuccess('');
+       if (!formData.eleve_id) {
+    setError('Veuillez selectionner un eleve.');
+    return;
+  }
+  if (formData.transfer_type === 'external' && !formData.to_school_id) {
+    setError("Veuillez selectionner l'etablissement cible.");
+    return;
+  }
+  if (formData.transfer_type === 'internal' && !formData.to_classe_id) {
+    setError('Veuillez selectionner la classe cible.');
+    return;
+  }
       await api.patch(`/system/transferts/${id}/status`, { status });
       await load();
       setSuccess(`Demande ${status === 'accepted' ? 'acceptee' : 'rejetee'} avec succes.`);
@@ -174,14 +186,16 @@ function Transferts() {
                   <td className="px-4 py-3">{item.to_school_name || item.from_school_name || '-'}</td>
                   <td className="px-4 py-3">{item.status}</td>
                   <td className="px-4 py-3 text-right space-x-2">
-                    {item.transfer_type !== 'external' || Number(item.to_school_id || 0) === currentSchoolId ? (
-                      <>
-                        <button className="rounded-md bg-emerald-600 px-3 py-1 text-xs text-white" onClick={() => handleStatus(item.id, 'accepted')}>Accepter</button>
-                        <button className="rounded-md bg-amber-600 px-3 py-1 text-xs text-white" onClick={() => handleStatus(item.id, 'rejected')}>Rejeter</button>
-                      </>
-                    ) : (
-                      <span className="text-xs text-slate-400">En attente de l'etablissement cible</span>
-                    )}
+                    {item.status !== 'pending' ? (
+    <span className="text-xs text-slate-400 capitalize">{item.status}</span>
+  ) : item.transfer_type !== 'external' || Number(item.to_school_id || 0) === currentSchoolId ? (
+    <>
+      <button className="rounded-md bg-emerald-600 px-3 py-1 text-xs text-white" onClick={() => handleStatus(item.id, 'accepted')}>Accepter</button>
+      <button className="rounded-md bg-amber-600 px-3 py-1 text-xs text-white" onClick={() => handleStatus(item.id, 'rejected')}>Rejeter</button>
+    </>
+  ) : (
+    <span className="text-xs text-slate-400">En attente de l'etablissement cible</span>
+  )}
                   </td>
                 </tr>
               ))}

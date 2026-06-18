@@ -152,9 +152,9 @@ function generateMatricule() {
   return `ENS${suffix}${random}`;
 }
 
-function handleSqliteConstraint(res, err, entityLabel) {
+function handleUniqueConstraint(res, err, entityLabel) {
   const message = String(err?.message || '');
-  if (!message.includes('SQLITE_CONSTRAINT')) return false;
+  if (!message.includes('UNIQUE') && !message.includes('duplicate key') && !message.includes('constraint')) return false;
 
   if (message.includes('enseignants.email')) {
     res.status(400).json({ error: `Un ${entityLabel} avec cet email existe deja` });
@@ -233,7 +233,7 @@ exports.addEnseignant = async (req, res) => {
         async function(insertErr) {
           if (insertErr) {
             console.error('Erreur ajout enseignant:', insertErr);
-            if (handleSqliteConstraint(res, insertErr, 'enseignant')) return;
+            if (handleUniqueConstraint(res, insertErr, 'enseignant')) return;
             return res.status(500).json({ error: "Erreur lors de l'ajout de l'enseignant" });
           }
 
@@ -260,7 +260,7 @@ exports.addEnseignant = async (req, res) => {
           } catch (accountErr) {
             console.error('Erreur creation compte enseignant:', accountErr);
             db.run('DELETE FROM enseignants WHERE id = ? AND school_id = ?', [this.lastID, schoolId], () => {
-              if (accountErr.message === 'SQLITE_CONSTRAINT' || String(accountErr?.message || '').includes('UNIQUE')) {
+              if (String(accountErr.message || '').includes('UNIQUE') || String(accountErr?.message || '').includes('duplicate key')) {
                 return res.status(400).json({ error: 'Un compte utilisateur existe deja avec cet email' });
               }
               return res.status(500).json({ error: 'Enseignant non enregistre car la creation du compte a echoue' });
@@ -334,7 +334,7 @@ exports.updateEnseignant = async (req, res) => {
     db.run(`UPDATE enseignants SET ${assignments} WHERE id = ? AND school_id = ?`, values, async function(err) {
       if (err) {
         console.error('Erreur mise a jour enseignant:', err);
-        if (handleSqliteConstraint(res, err, 'enseignant')) return;
+        if (handleUniqueConstraint(res, err, 'enseignant')) return;
         return res.status(500).json({ error: "Erreur lors de la mise a jour de l'enseignant" });
       }
       if (this.changes === 0) {

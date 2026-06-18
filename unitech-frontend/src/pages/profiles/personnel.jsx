@@ -919,6 +919,11 @@ function PersonnelProfile() {
     [formData]
   );
 
+  const salaryHistoryEntries = useMemo(
+    () => parseSalaryHistory(formData.historiqueSalaires),
+    [formData.historiqueSalaires]
+  );
+
   const canChangeOwnPassword = useMemo(() => {
     const currentEmail = String(currentUser?.email || "").trim().toLowerCase();
     const profileEmail = String(formData.email || "").trim().toLowerCase();
@@ -1946,6 +1951,49 @@ function PersonnelProfile() {
             <p className="text-xs uppercase tracking-wide text-slate-500">Type de remuneration</p>
             <p className="mt-1 text-base font-semibold text-slate-900">{getPaymentTypeLabel(formData.typePayement)}</p>
           </div>
+        </div>
+      </div>
+      <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Catalogue salaire</p>
+            <h4 className="mt-1 text-lg font-semibold text-slate-900">Historique des versements</h4>
+            <p className="mt-1 text-sm text-slate-600">
+              Cette vue resume les montants saisis pour chaque mois ou periode du profil.
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <p className="text-xs uppercase tracking-wide text-slate-500">Base de remuneration</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">{getFinanceBaseLabel(formData.typePayement)}</p>
+          </div>
+        </div>
+        <div className="mt-5 overflow-x-auto">
+          <table className="w-full min-w-[680px] text-sm">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr className="border-b border-slate-200">
+                <th className="px-3 py-3 text-left">Mois / periode</th>
+                <th className="px-3 py-3 text-right">Montant</th>
+                <th className="px-3 py-3 text-left">Statut</th>
+              </tr>
+            </thead>
+            <tbody>
+              {salaryHistoryEntries.length ? (
+                salaryHistoryEntries.map((item, index) => (
+                  <tr key={`${item.mois || 'salary'}-${index}`} className="border-b border-slate-100">
+                    <td className="px-3 py-3 text-slate-700">{item.mois || '-'}</td>
+                    <td className="px-3 py-3 text-right text-slate-700">{formatMoney(item.montant)}</td>
+                    <td className="px-3 py-3 text-slate-700">{item.statut || '-'}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="3" className="px-3 py-8 text-center text-slate-400">
+                    Aucun historique salarial disponible.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
       <div className="hidden">

@@ -2,7 +2,6 @@ import { NavLink } from 'react-router-dom';
 import { useEffect, useState, useMemo } from 'react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { toDataURL } from 'qrcode';
 import api from '../services/api';
 import { PageBanner, PageErrorState, PageLoadingState, usePageLoadingVisibility } from '../components/PageState';
 import { RippleButton } from '../components/RippleButton';
@@ -40,11 +39,8 @@ function formatDate(value) {
   return date.toLocaleDateString('fr-FR');
 }
 
-function formatScore(value) {
-  if (value === null || value === undefined || value === '') return '-';
-  const number = Number(value);
-  if (!Number.isFinite(number)) return String(value);
-  return number.toFixed(2).replace(/\.00$/, '');
+function displayMoney(value) {
+  return `${Number(value || 0).toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} F`;
 }
 
 function sanitizeFileName(value) {
@@ -69,6 +65,83 @@ function computeAge(dateValue) {
 
   if (!hasBirthdayPassed) age -= 1;
   return age >= 0 ? `${age} ans` : '-';
+}
+
+function monthStart(dateLike) {
+  const date = new Date(dateLike);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function countMonthsBetweenInclusive(startDateLike, endDateLike) {
+  const start = monthStart(startDateLike);
+  const end = monthStart(endDateLike);
+  if (!start || !end || start > end) return 0;
+  return ((end.getFullYear() - start.getFullYear()) * 12) + (end.getMonth() - start.getMonth()) + 1;
+}
+
+function resolveEffectiveStartDate(dateInscription, schoolStartDate) {
+  const candidates = [schoolStartDate, dateInscription]
+    .map((value) => {
+      if (!value) return null;
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? null : date;
+    })
+    .filter(Boolean);
+
+  if (!candidates.length) {
+    return new Date();
+  }
+
+  return candidates.reduce((latest, current) => (current > latest ? current : latest));
+}
+
+function computePaymentSummary(eleve, classes, paiements, schoolStartDate) {
+  const classe = classes.find((item) => String(item.id) === String(eleve?.classe_actuelle_id));
+  const mensualite = Number(classe?.mensualite || 0);
+  const reduction = Number(eleve?.reduction || 0);
+  const elevePaiements = (paiements || []).filter((item) => String(item.eleve_id) === String(eleve?.id));
+  const totalVerse = elevePaiements.reduce((sum, item) => sum + Number(item.montant || 0), 0);
+  const totalVerseHorsInscription = elevePaiements
+    .filter((item) => String(item.mois || '').trim().toLowerCase() !== 'inscription')
+    .reduce((sum, item) => sum + Number(item.montant || 0), 0);
+  const dateDebut = resolveEffectiveStartDate(eleve?.date_inscription || eleve?.created_at, schoolStartDate);
+  const moisDus = countMonthsBetweenInclusive(dateDebut, new Date());
+  const totalMensualitesDues = mensualite * moisDus;
+  const totalMensualitesNettes = Math.max(totalMensualitesDues - reduction, 0);
+  const resteAPayer = Math.max(totalMensualitesNettes - totalVerseHorsInscription, 0);
+  const moisCouverts = mensualite > 0 ? Math.floor(totalVerseHorsInscription / mensualite) : 0;
+  const etatPaiement =
+    totalMensualitesNettes <= 0
+      ? 'paye'
+      : totalVerseHorsInscription <= 0
+        ? 'non paye'
+        : resteAPayer > 0
+          ? 'partiel'
+          : 'paye';
+
+  return {
+    mensualite,
+    reduction,
+    totalVerse,
+    totalVerseHorsInscription,
+    moisDus,
+    totalMensualitesDues,
+    totalMensualitesNettes,
+    resteAPayer,
+    moisCouverts,
+    etatPaiement,
+  };
+}
+
+function formatPaymentStatusLabel(paymentSummary) {
+  const status = String(paymentSummary?.etatPaiement || '').trim().toLowerCase();
+  const remaining = displayMoney(paymentSummary?.resteAPayer || 0);
+
+  if (status === 'non paye') return `Non paye - reste a payer: ${remaining}`;
+  if (status === 'partiel') return `Partiel - reste a payer: ${remaining}`;
+  if (status === 'paye') return 'Paye';
+  return paymentSummary?.etatPaiement || '-';
 }
 
 const DEACTIVATION_REASONS = [
@@ -106,18 +179,18 @@ export default function ElevesListe() {
   const [classes, setClasses] = useState([]);
   const [matieres, setMatieres] = useState([]);
   const [affectations, setAffectations] = useState([]);
-  const [enseignants, setEnseignants] = useState([]);
+  const [paiements, setPaiements] = useState([]);
   const [filters, setFilters] = useState(initialFilters);
   const [deleteState, setDeleteState] = useState(initialDeleteState);
   const [deletePassword, setDeletePassword] = useState('');
   const [deactivationReason, setDeactivationReason] = useState('abandon');
   const [deactivationReasonDetails, setDeactivationReasonDetails] = useState('');
   const [deactivatingId, setDeactivatingId] = useState(null);
-  const [notesRows, setNotesRows] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [schoolInfo, setSchoolInfo] = useState(null);
+  const [dashboardContext, setDashboardContext] = useState(null);
   const [exportingPdf, setExportingPdf] = useState(false);
-  const [generationProgress, setGenerationProgress] = useState({ running: false, current: 0, total: 0, message: '' });
+  const [generationProgress] = useState({ running: false, current: 0, total: 0, message: '' });
   const [exportingList, setExportingList] = useState(false);
   const [selectedExportFormat, setSelectedExportFormat] = useState('pdf');
   const [ocrNoteType, setOcrNoteType] = useState('devoir');
@@ -126,9 +199,9 @@ export default function ElevesListe() {
   const currentRole = normalizeRole(currentUser?.role || localStorage.getItem('role'));
   const canExportStudents = ['directeur', 'promoteur', 'comptable', 'secretaire'].includes(currentRole) || ['super@admin', 'superadmin'].includes(currentRole);
 
+  const selectedClasseId = String(filters.classe || '').trim();
+
   const availableMatieresForClasse = useMemo(() => {
-    const selectedClasse = classes.find((classe) => String(classe.name) === String(filters.classe));
-    const selectedClasseId = selectedClasse?.id ? String(selectedClasse.id) : String(filters.classe || '');
     const source = selectedClasseId
       ? affectations.filter((item) => String(item.classe_id) === selectedClasseId)
       : affectations;
@@ -145,43 +218,42 @@ export default function ElevesListe() {
     return [...new Set(matiereNames)]
       .sort((a, b) => a.localeCompare(b, 'fr'))
       .map((name) => ({ id: name, nom: name }));
-  }, [affectations, classes, filters.classe, matieres]);
+  }, [affectations, selectedClasseId, matieres]);
 
   const filteredEleves = useMemo(() => {
     const search = toLower(filters.matricule);
-    const classeFilter = String(filters.classe || '').trim();
     const matiereFilter = String(filters.matiere || '').trim();
 
     return eleves.filter((eleve) => {
       const fullName = `${eleve.nom || ''} ${eleve.prenom || ''}`.trim();
-      const className = getClasseName(eleve.classe_actuelle_id, classes);
+      const eleveClasseId = String(eleve.classe_actuelle_id || '').trim();
       const matchesSearch =
         !search ||
         toLower(eleve.matricule).includes(search) ||
         toLower(fullName).includes(search);
-      const matchesClass = !classeFilter || className === classeFilter;
+      const matchesClass = !selectedClasseId || eleveClasseId === selectedClasseId;
       const matchesSubject =
         !matiereFilter ||
         affectations.some(
           (item) =>
-            String(item.classe_id) === String(eleve.classe_actuelle_id) &&
+            String(item.classe_id) === eleveClasseId &&
             String(item.nom_matiere || item.nom || item.matiere || '') === matiereFilter
         );
       return matchesSearch && matchesClass && matchesSubject;
     });
-  }, [affectations, classes, eleves, filters.classe, filters.matiere, filters.matricule]);
+  }, [affectations, eleves, filters.matiere, filters.matricule, selectedClasseId]);
 
   useEffect(() => {
     const fetchPageData = async () => {
       try {
-        const [classesResponse, matieresResponse, elevesResponse, meResponse, notesResponse, affectationsResponse, enseignantsResponse] = await Promise.all([
+        const [classesResponse, matieresResponse, elevesResponse, meResponse, affectationsResponse, paiementsResponse, dashboardResponse] = await Promise.all([
           api.get('/classes'),
           api.get('/matieres'),
           api.get('/eleves/'),
           api.get('/auth/me'),
-          api.get('/system/notes'),
           api.get('/affectation'),
-          api.get('/enseignants'),
+          api.get('/system/paiements'),
+          api.get('/system/dashboard/summary'),
         ]);
 
         setClasses(classesResponse.data || []);
@@ -189,9 +261,9 @@ export default function ElevesListe() {
         setEleves(elevesResponse.data || []);
         setCurrentUser(meResponse.data?.user || null);
         setSchoolInfo(meResponse.data || null);
-        setNotesRows(notesResponse.data?.notes || []);
         setAffectations(affectationsResponse.data || []);
-        setEnseignants(enseignantsResponse.data || []);
+        setPaiements(paiementsResponse.data || []);
+        setDashboardContext(dashboardResponse.data || null);
       } catch (err) {
         if (err?.response?.status === 401) {
           window.location.href = '/login';
@@ -221,29 +293,34 @@ export default function ElevesListe() {
   }
 
   function buildStudentExportRows() {
-    return filteredEleves.map((eleve, index) => ({
-      numero: index + 1,
-      matricule: eleve.matricule || '-',
-      nomComplet: `${eleve.nom || ''} ${eleve.prenom || ''}`.trim() || '-',
-      sexe: eleve.sexe || '-',
-      dateNaissance: formatDate(eleve.date_naissance),
-      lieuNaissance: eleve.lieu_naissance || '-',
-      nationalite: eleve.nationalite || '-',
-      age: computeAge(eleve.date_naissance),
-      classe: getClasseName(eleve.classe_actuelle_id, classes),
-      parent: eleve.nom_parent || '-',
-      professionParent: eleve.profession_parent || '-',
-      telephoneParent: eleve.telephone_parent || '-',
-      emailParent: eleve.email_parent || '-',
-      adresse: eleve.adresse || '-',
-      dateInscription: formatDate(eleve.date_inscription || eleve.created_at),
-      anneeScolaire: eleve.annee_scolaire_id || '-',
-      etatPaiement: eleve.etat_paiement || '-',
-      fraisTotal: displayMoney(eleve.frais_total),
-      montantPaye: displayMoney(eleve.montant_paye),
-      resteAPayer: displayMoney(eleve.reste_a_payer),
-      statut: formatStudentStatus(eleve),
-    }));
+    return filteredEleves.map((eleve, index) => {
+      const paymentSummary = computePaymentSummary(eleve, classes, paiements, dashboardContext?.forecast?.startDate);
+      return {
+        numero: index + 1,
+        matricule: eleve.matricule || '-',
+        nomComplet: `${eleve.nom || ''} ${eleve.prenom || ''}`.trim() || '-',
+        sexe: eleve.sexe || '-',
+        dateNaissance: formatDate(eleve.date_naissance),
+        lieuNaissance: eleve.lieu_naissance || '-',
+        nationalite: eleve.nationalite || '-',
+        age: computeAge(eleve.date_naissance),
+        classe: getClasseName(eleve.classe_actuelle_id, classes),
+        parent: eleve.nom_parent || '-',
+        professionParent: eleve.profession_parent || '-',
+        telephoneParent: eleve.telephone_parent || '-',
+        emailParent: eleve.email_parent || '-',
+        adresse: eleve.adresse || '-',
+        dateInscription: formatDate(eleve.date_inscription || eleve.created_at),
+        anneeScolaire: eleve.annee_scolaire_id || '-',
+        mensualite: displayMoney(paymentSummary.mensualite),
+        moisDus: paymentSummary.moisDus,
+        totalDu: displayMoney(paymentSummary.totalMensualitesNettes),
+        montantPaye: displayMoney(paymentSummary.totalVerse),
+        moisCouverts: paymentSummary.moisCouverts,
+        etatPaiement: formatPaymentStatusLabel(paymentSummary),
+        statut: formatStudentStatus(eleve),
+      };
+    });
   }
 
   function exportStudentsCsv(rows) {
@@ -264,10 +341,12 @@ export default function ElevesListe() {
       'Adresse',
       'Date inscription',
       'Annee scolaire',
-      'Etat paiement',
-      'Frais total',
+      'Mensualite',
+      'Mois dus',
+      'Total du',
       'Montant paye',
-      'Reste a payer',
+      'Mois couverts',
+      'Etat paiement',
       'Statut',
     ];
     const csvLines = [
@@ -290,10 +369,12 @@ export default function ElevesListe() {
           row.adresse,
           row.dateInscription,
           row.anneeScolaire,
-          row.etatPaiement,
-          row.fraisTotal,
+          row.mensualite,
+          row.moisDus,
+          row.totalDu,
           row.montantPaye,
-          row.resteAPayer,
+          row.moisCouverts,
+          row.etatPaiement,
           row.statut,
         ]
           .map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`)
@@ -318,7 +399,7 @@ export default function ElevesListe() {
         {
           name: 'Eleves',
           rows: [
-            ['N°', 'Matricule', 'Nom complet', 'Sexe', 'Date naissance', 'Lieu naissance', 'Nationalite', 'Age', 'Classe', 'Parent', 'Profession parent', 'Telephone parent', 'Email parent', 'Adresse', 'Date inscription', 'Annee scolaire', 'Etat paiement', 'Frais total', 'Montant paye', 'Reste a payer', 'Statut'],
+            ['N°', 'Matricule', 'Nom complet', 'Sexe', 'Date naissance', 'Lieu naissance', 'Nationalite', 'Age', 'Classe', 'Parent', 'Profession parent', 'Telephone parent', 'Email parent', 'Adresse', 'Date inscription', 'Annee scolaire', 'Mensualite', 'Mois dus', 'Total du', 'Montant paye', 'Mois couverts', 'Etat paiement', 'Statut'],
             ...rows.map((row) => [
               row.numero,
               row.matricule,
@@ -336,10 +417,12 @@ export default function ElevesListe() {
               row.adresse,
               row.dateInscription,
               row.anneeScolaire,
-              row.etatPaiement,
-              row.fraisTotal,
+              row.mensualite,
+              row.moisDus,
+              row.totalDu,
               row.montantPaye,
-              row.resteAPayer,
+              row.moisCouverts,
+              row.etatPaiement,
               row.statut,
             ]),
           ],
@@ -500,10 +583,12 @@ export default function ElevesListe() {
         'Adresse',
         'Date inscription',
         'Annee scolaire',
-        'Etat paiement',
-        'Frais total',
+        'Mensualite',
+        'Mois dus',
+        'Total du',
         'Montant paye',
-        'Reste a payer',
+        'Mois couverts',
+        'Etat paiement',
         'Statut',
       ]],
       body: rows.map((row) => [
@@ -523,10 +608,12 @@ export default function ElevesListe() {
         row.adresse,
         row.dateInscription,
         row.anneeScolaire,
-        row.etatPaiement,
-        row.fraisTotal,
+        row.mensualite,
+        row.moisDus,
+        row.totalDu,
         row.montantPaye,
-        row.resteAPayer,
+        row.moisCouverts,
+        row.etatPaiement,
         row.statut,
       ]),
     });
@@ -622,7 +709,7 @@ export default function ElevesListe() {
             >
               <option value="">Toutes les classes</option>
               {classes.map((cl) => (
-                <option key={cl.id} value={cl.name}>{cl.name}</option>
+                <option key={cl.id} value={cl.id}>{cl.name}</option>
               ))}
             </select>
           </div>
@@ -983,4 +1070,5 @@ export default function ElevesListe() {
     </section>
   );
 }
+
 

@@ -88,9 +88,9 @@ function generateMatricule() {
   return `PER${suffix}${random}`;
 }
 
-function handleSqliteConstraint(res, err, entityLabel) {
+function handleUniqueConstraint(res, err, entityLabel) {
   const message = String(err?.message || '');
-  if (!message.includes('SQLITE_CONSTRAINT')) return false;
+  if (!message.includes('UNIQUE') && !message.includes('duplicate key') && !message.includes('constraint')) return false;
 
   if (message.includes('personnels.email')) {
     res.status(400).json({ error: `Un ${entityLabel} avec cet email existe deja` });
@@ -215,7 +215,7 @@ exports.addpersonnel = async (req, res) => {
         values,
         async function(insertErr) {
           if (insertErr) {
-            if (handleSqliteConstraint(res, insertErr, 'personnel')) return;
+            if (handleUniqueConstraint(res, insertErr, 'personnel')) return;
             return res.status(500).json({ error: "echec de l'ajout du personnel" });
           }
 
@@ -242,7 +242,7 @@ exports.addpersonnel = async (req, res) => {
           } catch (accountErr) {
             console.error('Erreur creation compte personnel:', accountErr);
             db.run('DELETE FROM personnels WHERE id = ? AND school_id = ?', [this.lastID, schoolId], () => {
-              if (accountErr.message === 'SQLITE_CONSTRAINT' || String(accountErr?.message || '').includes('UNIQUE')) {
+              if (String(accountErr.message || '').includes('UNIQUE') || String(accountErr?.message || '').includes('duplicate key')) {
                 return res.status(400).json({ error: 'Un compte utilisateur existe deja avec cet email' });
               }
               return res.status(500).json({ error: 'Personnel non enregistre car la creation du compte a echoue' });
@@ -316,7 +316,7 @@ exports.updatepersonnel = async (req, res) => {
 
     db.run(`UPDATE personnels SET ${assignments} WHERE id = ? AND school_id = ?`, values, async function(err) {
       if (err) {
-        if (handleSqliteConstraint(res, err, 'personnel')) return;
+        if (handleUniqueConstraint(res, err, 'personnel')) return;
         return res.status(500).json({ error: 'echec de la mise a jour du personnel' });
       }
       if (this.changes === 0) {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../services/api';
 import { PageBanner, PageErrorState, PageLoadingState, usePageLoadingVisibility } from '../components/PageState';
+import { ClockIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 
 function formatDate(value) {
   if (!value) return '-';
@@ -18,6 +19,95 @@ function formatDateTime(value) {
 
 function formatMoney(value) {
   return `${Number(value || 0).toLocaleString('fr-FR')} FCFA`;
+}
+
+function parseDateOnly(value) {
+  if (!value) return null;
+  const date = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function addMonths(date, months) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  const next = new Date(date);
+  next.setMonth(next.getMonth() + Number(months || 0));
+  return next;
+}
+
+function differenceInCalendarMonths(from, to) {
+  if (!(from instanceof Date) || !(to instanceof Date)) return 0;
+  let diff = (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+  if (to.getDate() < from.getDate()) diff -= 1;
+  return diff;
+}
+
+function formatRemainingSubscription(school) {
+  const status = String(school.subscription_status || '').toLowerCase();
+  if (status !== 'active') return '-';
+
+  const expiresAt = parseDateOnly(school.subscription_expires_at);
+  if (!expiresAt) return '-';
+
+  const today = parseDateOnly(new Date().toISOString().slice(0, 10));
+  if (!today) return '-';
+
+  const remainingMs = expiresAt.getTime() - today.getTime();
+  if (remainingMs <= 0) return 'Expiré';
+
+  const daysRemaining = Math.max(0, Math.ceil(remainingMs / (24 * 60 * 60 * 1000)));
+  const monthsRemaining = Math.max(0, differenceInCalendarMonths(today, expiresAt));
+
+  if (monthsRemaining > 0) {
+    const monthAnchor = addMonths(today, monthsRemaining);
+    const extraDays = monthAnchor
+      ? Math.max(0, Math.ceil((expiresAt.getTime() - monthAnchor.getTime()) / (24 * 60 * 60 * 1000)))
+      : 0;
+    return extraDays > 0
+      ? `${monthsRemaining} mois et ${extraDays} jour(s)`
+      : `${monthsRemaining} mois`;
+  }
+
+  return `${Math.max(1, daysRemaining)} jour(s)`;
+}
+
+function getRemainingDays(school) {
+  const status = String(school.subscription_status || '').toLowerCase();
+  if (status !== 'active') return null;
+
+  const expiresAt = parseDateOnly(school.subscription_expires_at);
+  if (!expiresAt) return null;
+
+  const today = parseDateOnly(new Date().toISOString().slice(0, 10));
+  if (!today) return null;
+
+  return Math.max(0, Math.ceil((expiresAt.getTime() - today.getTime()) / (24 * 60 * 60 * 1000)));
+}
+
+function getSubscriptionStatusTone(status) {
+  if (status === 'active') return 'bg-emerald-100 text-emerald-800 ring-emerald-200';
+  if (status === 'pending') return 'bg-amber-100 text-amber-800 ring-amber-200';
+  if (status === 'suspended') return 'bg-rose-100 text-rose-800 ring-rose-200';
+  return 'bg-slate-100 text-slate-700 ring-slate-200';
+}
+
+function getRemainingTone(status) {
+  if (status === 'active') return 'bg-sky-100 text-sky-800 ring-sky-200';
+  if (status === 'pending') return 'bg-amber-50 text-amber-700 ring-amber-100';
+  if (status === 'suspended') return 'bg-rose-50 text-rose-700 ring-rose-100';
+  return 'bg-slate-50 text-slate-600 ring-slate-200';
+}
+
+function getRemainingIcon(school) {
+  const daysRemaining = getRemainingDays(school);
+  if (daysRemaining === null) {
+    return ClockIcon;
+  }
+  if (daysRemaining <= 7) {
+    return ExclamationTriangleIcon;
+  }
+  return ClockIcon;
 }
 
 function SuperAdmin() {
@@ -220,14 +310,18 @@ function SuperAdmin() {
                     </td>
                     <td className="px-3 py-2">{school.plan_name || school.subscription_plan || school.plan || '-'}</td>
                     <td className="px-3 py-2">
-                      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${
-                        status === 'active' ? 'bg-emerald-100 text-emerald-700' :
-                        status === 'pending' ? 'bg-amber-100 text-amber-700' :
-                        status === 'suspended' ? 'bg-rose-100 text-rose-700' :
-                        'bg-slate-200 text-slate-700'
-                      }`}>
-                        {status || '-'}
-                      </span>
+                      <div className="flex flex-col gap-2">
+                        <span className={`inline-flex w-fit items-center rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset ${getSubscriptionStatusTone(status)}`}>
+                          {status || '-'}
+                        </span>
+                        <span className={`inline-flex w-fit items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset ${getRemainingTone(status)}`}>
+                          {(() => {
+                            const RemainingIcon = getRemainingIcon(school);
+                            return <RemainingIcon className="h-3.5 w-3.5" aria-hidden="true" />;
+                          })()}
+                          {formatRemainingSubscription(school)}
+                        </span>
+                      </div>
                     </td>
                     <td className="px-3 py-2">{formatDate(school.subscription_expires_at)}</td>
                     <td className="px-3 py-2 space-y-2">
