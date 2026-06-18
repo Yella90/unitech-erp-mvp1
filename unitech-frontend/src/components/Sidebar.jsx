@@ -55,6 +55,7 @@ function Sidebar({ open = false, onClose, onLogoutRequest }) {
     ? superAdminNavigation
     : navigation.filter((item) => canDisplayNavItem(role, item));
     console.log('🟢 Sidebar rendu avec open =', open);
+    
 
   return (
     <>
